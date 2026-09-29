@@ -1,0 +1,381 @@
+openapi: 3.1.0
+info:
+  title: Event Registration API
+  version: 1.0.0
+  description: |
+    活動報名範例服務。所有時間使用 RFC 3339；登入後以 Bearer token 呼叫受保護端點。
+    token 有效期 24 小時，登出立即撤銷。報名與取消會在資料庫交易中同步更新剩餘名額。
+servers:
+  - url: http://localhost:18080
+tags:
+  - name: Health
+  - name: Auth
+  - name: Events
+  - name: Registrations
+paths:
+  /healthz:
+    get:
+      tags: [Health]
+      summary: 程序存活檢查
+      responses:
+        '200': {description: API process is alive}
+  /readyz:
+    get:
+      tags: [Health]
+      summary: 資料庫就緒檢查
+      responses:
+        '200': {description: API and database are ready}
+        '503': {$ref: '#/components/responses/ServiceUnavailable'}
+  /v1/auth/register:
+    post:
+      tags: [Auth]
+      summary: 註冊一般會員
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/RegisterRequest'}
+      responses:
+        '201':
+          description: Created user
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/User'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '409': {$ref: '#/components/responses/Conflict'}
+  /v1/auth/login:
+    post:
+      tags: [Auth]
+      summary: 登入並取得 24 小時 token
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/LoginRequest'}
+      responses:
+        '200':
+          description: Login succeeded
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [token, user]
+                properties:
+                  token: {type: string}
+                  user: {$ref: '#/components/schemas/User'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+  /v1/auth/logout:
+    post:
+      tags: [Auth]
+      summary: 撤銷目前 token
+      security: [{bearerAuth: []}]
+      responses:
+        '204': {description: Logged out}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+  /v1/me:
+    get:
+      tags: [Auth]
+      summary: 取得目前使用者
+      security: [{bearerAuth: []}]
+      responses:
+        '200':
+          description: Current user
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/User'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+  /v1/me/registrations:
+    get:
+      tags: [Registrations]
+      summary: 取得自己的報名紀錄（含取消紀錄）
+      security: [{bearerAuth: []}]
+      parameters:
+        - {$ref: '#/components/parameters/Limit'}
+        - {$ref: '#/components/parameters/Offset'}
+      responses:
+        '200':
+          description: Registration page
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/MyRegistrationPage'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+  /v1/events:
+    get:
+      tags: [Events]
+      summary: 按開始時間列出活動
+      parameters:
+        - {$ref: '#/components/parameters/Limit'}
+        - {$ref: '#/components/parameters/Offset'}
+      responses:
+        '200':
+          description: Event page
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/EventPage'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+    post:
+      tags: [Events]
+      summary: 建立活動（管理員）
+      security: [{bearerAuth: []}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/CreateEventRequest'}
+      responses:
+        '201':
+          description: Created event
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Event'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+  /v1/events/{id}:
+    parameters:
+      - {$ref: '#/components/parameters/EventID'}
+    get:
+      tags: [Events]
+      summary: 取得活動
+      responses:
+        '200':
+          description: Event
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Event'}
+        '404': {$ref: '#/components/responses/NotFound'}
+    patch:
+      tags: [Events]
+      summary: 修改尚未開始且開放中的活動標題或描述（管理員）
+      security: [{bearerAuth: []}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/UpdateEventRequest'}
+      responses:
+        '200':
+          description: Updated event
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Event'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+  /v1/events/{id}/close:
+    parameters:
+      - {$ref: '#/components/parameters/EventID'}
+    post:
+      tags: [Events]
+      summary: 關閉活動報名（管理員）
+      security: [{bearerAuth: []}]
+      responses:
+        '200':
+          description: Closed event
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Event'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+  /v1/events/{id}/registrations:
+    parameters:
+      - {$ref: '#/components/parameters/EventID'}
+    post:
+      tags: [Registrations]
+      summary: 報名活動
+      description: 活動必須開放、未開始且仍有名額；已報名者不可重複報名。
+      security: [{bearerAuth: []}]
+      responses:
+        '201':
+          description: Created registration
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Registration'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+    get:
+      tags: [Registrations]
+      summary: 取得活動報名紀錄（管理員；含取消紀錄）
+      security: [{bearerAuth: []}]
+      parameters:
+        - {$ref: '#/components/parameters/Limit'}
+        - {$ref: '#/components/parameters/Offset'}
+      responses:
+        '200':
+          description: Registration page
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/EventRegistrationPage'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+  /v1/events/{id}/registrations/me:
+    parameters:
+      - {$ref: '#/components/parameters/EventID'}
+    delete:
+      tags: [Registrations]
+      summary: 取消自己的有效報名並釋出名額
+      security: [{bearerAuth: []}]
+      responses:
+        '204': {description: Cancelled}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '404': {$ref: '#/components/responses/NotFound'}
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: opaque token
+  parameters:
+    EventID:
+      in: path
+      name: id
+      required: true
+      schema: {type: string, format: uuid}
+    Limit:
+      in: query
+      name: limit
+      schema: {type: integer, minimum: 1, maximum: 100, default: 20}
+    Offset:
+      in: query
+      name: offset
+      schema: {type: integer, minimum: 0, maximum: 10000, default: 0}
+  responses:
+    BadRequest:
+      description: Invalid input
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/Error'}
+    Unauthorized:
+      description: Missing, invalid or expired token
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/Error'}
+    Forbidden:
+      description: Admin role required
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/Error'}
+    NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/Error'}
+    Conflict:
+      description: Conflict, closed event, full event or duplicate registration
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/Error'}
+    ServiceUnavailable:
+      description: Database unavailable
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/Error'}
+  schemas:
+    Error:
+      type: object
+      required: [code, message]
+      properties:
+        code: {type: string, example: EVENT_FULL}
+        message: {type: string}
+    User:
+      type: object
+      required: [id, name, email, role, createdAt]
+      properties:
+        id: {type: string, format: uuid}
+        name: {type: string}
+        email: {type: string, format: email}
+        role: {type: string, enum: [member, admin]}
+        createdAt: {type: string, format: date-time}
+    RegisterRequest:
+      type: object
+      required: [name, email, password]
+      additionalProperties: false
+      properties:
+        name: {type: string, minLength: 1, maxLength: 80}
+        email: {type: string, format: email, maxLength: 254}
+        password: {type: string, description: 12–72 bytes}
+    LoginRequest:
+      type: object
+      required: [email, password]
+      additionalProperties: false
+      properties:
+        email: {type: string, format: email}
+        password: {type: string}
+    Event:
+      type: object
+      required: [id, title, description, startsAt, capacity, remaining, status, createdAt]
+      properties:
+        id: {type: string, format: uuid}
+        title: {type: string}
+        description: {type: string}
+        startsAt: {type: string, format: date-time}
+        capacity: {type: integer}
+        remaining: {type: integer}
+        status: {type: string, enum: [open, closed]}
+        createdAt: {type: string, format: date-time}
+    CreateEventRequest:
+      type: object
+      required: [title, startsAt, capacity]
+      additionalProperties: false
+      properties:
+        title: {type: string, minLength: 1, maxLength: 120}
+        description: {type: string, maxLength: 2000, default: ''}
+        startsAt: {type: string, format: date-time}
+        capacity: {type: integer, minimum: 1, maximum: 10000}
+    UpdateEventRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        title: {type: string, minLength: 1, maxLength: 120}
+        description: {type: string, maxLength: 2000}
+    Registration:
+      type: object
+      required: [id, eventId, userId, createdAt]
+      properties:
+        id: {type: string, format: uuid}
+        eventId: {type: string, format: uuid}
+        userId: {type: string, format: uuid}
+        createdAt: {type: string, format: date-time}
+        cancelledAt: {type: string, format: date-time}
+    MyRegistration:
+      allOf:
+        - {$ref: '#/components/schemas/Registration'}
+        - type: object
+          required: [eventTitle, startsAt]
+          properties:
+            eventTitle: {type: string}
+            startsAt: {type: string, format: date-time}
+    EventRegistration:
+      allOf:
+        - {$ref: '#/components/schemas/Registration'}
+        - type: object
+          required: [userName, userEmail]
+          properties:
+            userName: {type: string}
+            userEmail: {type: string, format: email}
+    EventPage:
+      type: object
+      required: [items, limit, offset]
+      properties:
+        items: {type: array, items: {$ref: '#/components/schemas/Event'}}
+        limit: {type: integer}
+        offset: {type: integer}
+    MyRegistrationPage:
+      type: object
+      required: [items, limit, offset]
+      properties:
+        items: {type: array, items: {$ref: '#/components/schemas/MyRegistration'}}
+        limit: {type: integer}
+        offset: {type: integer}
+    EventRegistrationPage:
+      type: object
+      required: [items, limit, offset]
+      properties:
+        items: {type: array, items: {$ref: '#/components/schemas/EventRegistration'}}
+        limit: {type: integer}
+        offset: {type: integer}

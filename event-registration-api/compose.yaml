@@ -1,0 +1,83 @@
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: event_lab
+      POSTGRES_USER: app
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-localpass}
+    ports:
+      - "127.0.0.1:5433:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U app -d event_lab"]
+      interval: 3s
+      timeout: 3s
+      retries: 15
+
+  migrate:
+    build: .
+    command: ["/app/migrate"]
+    environment:
+      DATABASE_URL: postgres://app:${POSTGRES_PASSWORD:-localpass}@db:5432/event_lab?sslmode=disable
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: "no"
+
+  api:
+    build: .
+    command: ["/app/api"]
+    environment:
+      DATABASE_URL: postgres://app:${POSTGRES_PASSWORD:-localpass}@db:5432/event_lab?sslmode=disable
+      PORT: "8080"
+    ports:
+      - "127.0.0.1:${API_PORT:-18080}:8080"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/readyz"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  admin:
+    build: .
+    command: ["/app/admin"]
+    profiles: ["tools"]
+    environment:
+      DATABASE_URL: postgres://app:${POSTGRES_PASSWORD:-localpass}@db:5432/event_lab?sslmode=disable
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+  db-test:
+    image: postgres:16-alpine
+    profiles: ["test"]
+    environment:
+      POSTGRES_DB: event_test
+      POSTGRES_USER: test
+      POSTGRES_PASSWORD: testpass
+    tmpfs:
+      - /var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U test -d event_test"]
+      interval: 3s
+      timeout: 3s
+      retries: 15
+
+  test:
+    build:
+      context: .
+      target: build
+    command: ["go", "test", "-tags=integration", "./..."]
+    profiles: ["test"]
+    environment:
+      TEST_DATABASE_URL: postgres://test:testpass@db-test:5432/event_test?sslmode=disable
+    depends_on:
+      db-test:
+        condition: service_healthy
+
+volumes:
+  postgres_data:
