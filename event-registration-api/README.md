@@ -1,5 +1,7 @@
 # 活動報名 API
 
+程式碼審查導覽從[架構總覽](docs/code-review/00-架構總覽.md)開始，並逐層連結到 API、業務規則、資料庫、部署與測試的 review 筆記。
+
 一個可直接用 Docker Compose 啟動的 Go 後端練習成品：會員註冊與登入、管理員建立活動、活動報名與取消、名額控制、PostgreSQL migration、OpenAPI 規格及整合測試。刻意只使用 Go 標準庫的 `net/http` 作為 HTTP 層，讓路由、middleware、JSON、狀態碼與錯誤處理都能直接看懂；資料庫存取使用 `database/sql` + pgx driver，migration 使用 Goose。
 
 ## 快速啟動
